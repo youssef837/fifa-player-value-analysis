@@ -86,3 +86,5 @@ install.packages(c("factoextra", "car", "ggplot2", "dplyr", "readxl"))
 ## 📅 Date
 
 May 2026
+## 📄 Full Report
+[View the complete analysis report (PDF)](https://drive.google.com/file/d/1KhiS8riArHizEOgRbqYcn8drnfk2Ovc7/view?usp=drive_link)

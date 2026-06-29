@@ -1,0 +1,454 @@
+---
+title: "Analyse des Facteurs Influençant la Valeur Marchande des Joueurs FIFA"
+author:
+- Abdellah Ben Hayoun
+- Youssef Doumari
+- Saad Belkhoumani
+- Yahya Jada
+date: "2026-05-19"
+output:
+  word_document:
+    toc: true
+    toc_depth: '3'
+  pdf_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    number_sections: true
+subtitle: Parties I, II & III — Exploration, ACP & Régression
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 8,
+  fig.height = 5,
+  fig.align = "center"
+)
+```
+
+# Introduction
+
+Ce rapport analyse les facteurs influençant la *valeur marchande* des joueurs FIFA à travers des méthodes statistiques : statistiques descriptives, détection des outliers, ACP, et régression linéaire multiple.
+
+---
+
+# Chargement des packages
+
+```{r packages}
+library(factoextra)
+library(car)
+library(ggplot2)
+library(dplyr)
+library(readxl)
+```
+
+---
+
+# Importation et exploration des données
+
+```{r importation}
+data <- read_excel("data/fifa.xlsx")
+
+# Renommer toutes les colonnes problématiques
+names(data) <- gsub("\\.", "_", names(data))
+names(data) <- gsub("__+", "_", names(data))
+names(data) <- gsub("_$", "", names(data))
+
+# Renommage manuel sécurisé
+value_col <- grep("Value", names(data), value = TRUE)[1]
+wage_col  <- grep("Wage",  names(data), value = TRUE)[1]
+
+names(data)[names(data) == value_col] <- "Value_Euro_M"
+names(data)[names(data) == wage_col]  <- "Wage_K"
+
+cat("Colonnes après renommage :\n")
+print(names(data))
+head(data)
+str(data)
+summary(data)
+dim(data)
+names(data)
+```
+
+---
+
+# Traitement des données
+
+## Valeurs manquantes
+
+```{r valeurs-manquantes}
+colSums(is.na(data))
+data <- na.omit(data)
+cat("Dimensions après suppression des NA :", dim(data), "\n")
+```
+
+---
+
+# Statistiques descriptives
+
+```{r stats-descriptives}
+variables <- data[, c("Age", "Overall_Rating", "Potential", "Value_Euro_M")]
+
+statistiques <- data.frame(
+  Variable   = c("Age", "Overall_Rating", "Potential", "Value_Euro_M"),
+  Moyenne    = sapply(variables, mean),
+  Mediane    = sapply(variables, median),
+  Variance   = sapply(variables, var),
+  Ecart_type = sapply(variables, sd),
+  Minimum    = sapply(variables, min),
+  Maximum    = sapply(variables, max),
+  Q1         = sapply(variables, function(x) quantile(x, 0.25)),
+  Q3         = sapply(variables, function(x) quantile(x, 0.75))
+)
+
+knitr::kable(statistiques, digits = 2,
+             caption = "Statistiques descriptives des variables")
+```
+
+---
+
+# Visualisations exploratoires
+
+## Histogrammes
+
+```{r histogrammes, fig.height=8}
+par(mfrow = c(2, 2))
+hist(data$Age,            main = "Histogramme Age",            xlab = "Age",            col = "lightblue",  border = "black")
+hist(data$Overall_Rating, main = "Histogramme Overall Rating", xlab = "Overall Rating", col = "lightgreen", border = "black")
+hist(data$Potential,      main = "Histogramme Potential",      xlab = "Potential",      col = "orange",     border = "black")
+hist(data$Value_Euro_M,   main = "Histogramme Valeur",         xlab = "Value Euro M",   col = "pink",       border = "black")
+par(mfrow = c(1, 1))
+```
+
+## Boxplots avant suppression des outliers
+
+```{r boxplots-avant, fig.height=8}
+par(mfrow = c(2, 2))
+boxplot(data$Age,            main = "Boxplot Age",            col = "lightblue")
+boxplot(data$Overall_Rating, main = "Boxplot Overall Rating", col = "lightgreen")
+boxplot(data$Potential,      main = "Boxplot Potential",      col = "orange")
+boxplot(data$Value_Euro_M,   main = "Boxplot Value Euro M",   col = "red")
+par(mfrow = c(1, 1))
+```
+
+---
+
+# Détection et suppression des outliers (méthode IQR)
+
+```{r outliers}
+Q1        <- quantile(data$Value_Euro_M, 0.25)
+Q3        <- quantile(data$Value_Euro_M, 0.75)
+IQR_value <- IQR(data$Value_Euro_M)
+
+lower_limit <- Q1 - 1.5 * IQR_value
+upper_limit <- Q3 + 1.5 * IQR_value
+
+cat("Limite inférieure :", lower_limit, "\n")
+cat("Limite supérieure :", upper_limit, "\n")
+
+outliers   <- data[data$Value_Euro_M < lower_limit | data$Value_Euro_M > upper_limit, ]
+cat("Nombre d'outliers détectés :", nrow(outliers), "\n")
+
+clean_data <- data[data$Value_Euro_M >= lower_limit & data$Value_Euro_M <= upper_limit, ]
+cat("Dimensions avant suppression :", dim(data), "\n")
+cat("Dimensions après suppression :", dim(clean_data), "\n")
+```
+
+## Comparaison boxplots avant / après
+
+```{r boxplots-comparaison}
+par(mfrow = c(1, 2))
+boxplot(data$Value_Euro_M,       main = "Avant suppression", col = "red")
+boxplot(clean_data$Value_Euro_M, main = "Après suppression", col = "green")
+par(mfrow = c(1, 1))
+```
+
+---
+
+# Analyse en Composantes Principales (ACP)
+
+## Standardisation des variables
+
+```{r standardisation}
+scaled_data <- scale(clean_data[, c("Age", "Overall_Rating", "Potential",
+                                     "Wage_K", "Total_Stats")])
+
+cat("Moyennes (approx 0) :\n")
+print(round(colMeans(scaled_data), 4))
+
+cat("\nEcarts-types (approx 1) :\n")
+print(round(apply(scaled_data, 2, sd), 4))
+```
+
+## Calcul de l'ACP
+
+```{r acp}
+pca <- prcomp(scaled_data, center = TRUE, scale. = TRUE)
+summary(pca)
+```
+
+## Tableau des valeurs propres
+
+```{r valeurs-propres}
+eigenvalues         <- pca$sdev^2
+variance_explained  <- eigenvalues / sum(eigenvalues) * 100
+cumulative_variance <- cumsum(variance_explained)
+
+table_acp <- data.frame(
+  Axe                = paste0("PC", 1:length(eigenvalues)),
+  Valeur_propre      = round(eigenvalues, 4),
+  Variance_expliquee = round(variance_explained, 2),
+  Variance_cumulee   = round(cumulative_variance, 2)
+)
+
+knitr::kable(table_acp,
+             caption = "Tableau des valeurs propres et variance expliquée")
+```
+
+## Scree Plot
+
+```{r scree-plot}
+fviz_eig(pca, addlabels = TRUE,
+         main = "Scree Plot - Variance expliquée par composante")
+```
+
+## Cercle de corrélation
+
+```{r cercle-correlation}
+fviz_pca_var(pca,
+             col.var = "contrib",
+             gradient.cols = c("blue", "orange", "red"),
+             repel = TRUE,
+             title = "Cercle de corrélation des variables")
+```
+
+## Projection des individus
+
+```{r projection-individus}
+fviz_pca_ind(pca,
+             col.ind = "cos2",
+             gradient.cols = c("blue", "orange", "red"),
+             repel = FALSE,
+             label = "none",
+             title = "Projection des joueurs (cos2)")
+```
+
+## Biplot ACP
+
+```{r biplot}
+fviz_pca_biplot(pca,
+                repel = FALSE,
+                col.var = "red",
+                col.ind = "gray",
+                label = "var",
+                title = "Biplot ACP")
+```
+
+## Contributions des variables
+
+```{r contributions}
+fviz_contrib(pca, choice = "var", axes = 1, top = 10,
+             title = "Contribution des variables a l'axe 1")
+
+fviz_contrib(pca, choice = "var", axes = 2, top = 10,
+             title = "Contribution des variables a l'axe 2")
+```
+
+## Qualité de représentation cos2
+
+```{r cos2}
+fviz_cos2(pca, choice = "var", axes = 1:2,
+          title = "Qualite de representation des variables (cos2)")
+```
+
+## Qualité de représentation des individus
+
+```{r qualite-individus}
+cos2_ind <- rowSums(pca$x[, 1:2]^2) / rowSums(pca$x^2)
+coords   <- as.data.frame(pca$x[, 1:2])
+
+idx_top    <- order(cos2_ind, decreasing = TRUE)[1:3]
+idx_bottom <- order(cos2_ind)[1:3]
+idx_all    <- c(idx_top, idx_bottom)
+
+tableau_ind <- data.frame(
+  Nom       = clean_data$Name[idx_all],
+  Age       = clean_data$Age[idx_all],
+  Overall   = clean_data$Overall_Rating[idx_all],
+  Potential = clean_data$Potential[idx_all],
+  PC1       = round(coords$PC1[idx_all], 2),
+  PC2       = round(coords$PC2[idx_all], 2),
+  Cos2      = round(cos2_ind[idx_all], 3),
+  Profil    = c(rep("Bien represente", 3), rep("Mal represente", 3))
+)
+
+knitr::kable(tableau_ind,
+             caption = "Qualite de representation des individus (cos2)")
+```
+
+---
+
+# Modèle de Régression Linéaire Multiple
+
+## Construction du modèle
+
+```{r regression}
+model <- lm(Value_Euro_M ~ Age + Overall_Rating + Potential,
+            data = clean_data)
+summary(model)
+```
+
+## Métriques du modèle
+
+```{r metriques}
+r_squared          <- summary(model)$r.squared
+adjusted_r_squared <- summary(model)$adj.r.squared
+
+cat("R2 :", round(r_squared, 4), "\n")
+cat("R2 ajuste :", round(adjusted_r_squared, 4), "\n")
+```
+
+## Valeurs prédites et résidus
+
+```{r predictions-residus}
+clean_data$Valeur_predite <- predict(model)
+clean_data$Residus        <- residuals(model)
+
+knitr::kable(
+  head(clean_data[, c("Value_Euro_M", "Valeur_predite", "Residus")], 10),
+  digits = 3,
+  caption = "Extrait : valeurs reelles, predites et residus"
+)
+```
+
+---
+
+# Vérification des hypothèses du modèle
+
+## Linéarité
+
+```{r linearite}
+plot(model$fitted.values, model$residuals,
+     main = "Residus vs Valeurs predites",
+     xlab = "Valeurs predites", ylab = "Residus",
+     col = "blue", pch = 19)
+abline(h = 0, col = "red", lwd = 2)
+```
+
+## Normalité des résidus
+
+```{r normalite, fig.height=4}
+par(mfrow = c(1, 2))
+hist(model$residuals,
+     main = "Histogramme des residus",
+     xlab = "Residus", col = "lightblue", border = "black")
+qqnorm(model$residuals, main = "QQ-plot des residus")
+qqline(model$residuals, col = "red", lwd = 2)
+par(mfrow = c(1, 1))
+```
+
+## Test de normalité
+
+```{r shapiro}
+set.seed(123)
+shapiro.test(sample(model$residuals, 5000))
+
+ks.test(model$residuals, "pnorm",
+        mean = mean(model$residuals),
+        sd   = sd(model$residuals))
+```
+
+## Multicolinéarité VIF
+
+```{r vif}
+vif_values <- vif(model)
+knitr::kable(
+  data.frame(Variable = names(vif_values), VIF = round(vif_values, 3)),
+  caption = "Facteurs d'inflation de la variance (VIF)"
+)
+```
+
+## Matrice de corrélation
+
+```{r correlation}
+cor_matrix <- cor(clean_data[, c("Age", "Overall_Rating",
+                                  "Potential", "Value_Euro_M")])
+knitr::kable(round(cor_matrix, 3), caption = "Matrice de correlation")
+```
+
+## Graphiques diagnostiques
+
+```{r diagnostic, fig.height=8}
+par(mfrow = c(2, 2))
+plot(model)
+par(mfrow = c(1, 1))
+```
+
+---
+
+# Validation du modèle (train/test 80/20)
+
+```{r validation}
+set.seed(123)
+n           <- nrow(clean_data)
+train_index <- sample(1:n, size = floor(0.8 * n))
+train_data  <- clean_data[train_index, ]
+test_data   <- clean_data[-train_index, ]
+
+model_test  <- lm(Value_Euro_M ~ Age + Overall_Rating + Potential,
+                  data = train_data)
+predictions <- predict(model_test, newdata = test_data)
+
+mae  <- mean(abs(test_data$Value_Euro_M - predictions))
+rmse <- sqrt(mean((test_data$Value_Euro_M - predictions)^2))
+
+cat("MAE  :", round(mae, 4), "\n")
+cat("RMSE :", round(rmse, 4), "\n")
+```
+
+## Graphique valeurs réelles vs prédites
+
+```{r graph-validation}
+plot(test_data$Value_Euro_M, predictions,
+     main = "Valeurs reelles vs Valeurs predites",
+     xlab = "Valeur reelle (M Euro)", ylab = "Valeur predite (M Euro)",
+     col = "blue", pch = 19)
+abline(0, 1, col = "red", lwd = 2)
+```
+
+---
+
+# Prédiction exemple
+
+```{r prediction-exemple}
+nouveau_joueur <- data.frame(
+  Age            = 23,
+  Overall_Rating = 82,
+  Potential      = 88
+)
+
+prediction <- predict(model, nouveau_joueur,
+                      interval = "prediction", level = 0.95)
+
+cat("Valeur predite :", round(prediction[1], 2), "M Euro\n")
+cat("Intervalle 95% : [", round(prediction[2], 2),
+    ",", round(prediction[3], 2), "] M Euro\n")
+```
+
+---
+
+# Conclusion
+
+```{r conclusion}
+cat("========== RESULTATS FINAUX ==========\n")
+cat("R2 du modele      :", round(r_squared, 4), "\n")
+cat("R2 ajuste         :", round(adjusted_r_squared, 4), "\n")
+cat("MAE  (test)       :", round(mae, 4), "\n")
+cat("RMSE (test)       :", round(rmse, 4), "\n")
+cat("======================================\n")
+```
